@@ -99,10 +99,15 @@
     }, function(){ });
   }
 
+  function showSaveError(err){
+    setSyncStatus("Error al guardar: " + (err && err.message ? err.message : err) + " — revisá que Firestore y la autenticación anónima estén activados, y que las reglas estén publicadas.");
+    alert("No se pudo guardar. Revisá la configuración de Firebase (ver mensaje debajo del título).");
+  }
+
   // generic CRUD wrapper
   function addDoc(col, data){
     if (state.dbMode) {
-      return db.collection(col).add(data);
+      return db.collection(col).add(data).catch(showSaveError);
     } else {
       var id = uid();
       var obj = Object.assign({id:id}, data);
@@ -113,7 +118,7 @@
   }
   function setDoc(col, id, data){
     if (state.dbMode) {
-      return db.collection(col).doc(id).set(data);
+      return db.collection(col).doc(id).set(data).catch(showSaveError);
     } else {
       var arr = state[col];
       var idx = arr.findIndex(function(x){ return x.id === id; });
@@ -125,7 +130,7 @@
   }
   function deleteDoc(col, id){
     if (state.dbMode) {
-      return db.collection(col).doc(id).delete();
+      return db.collection(col).doc(id).delete().catch(showSaveError);
     } else {
       state[col] = state[col].filter(function(x){ return x.id !== id; });
       lsSave(); render();
@@ -135,7 +140,7 @@
   function saveSettings(data){
     state.settings = Object.assign({}, state.settings, data);
     if (state.dbMode) {
-      return db.doc("settings/main").set(state.settings);
+      return db.doc("settings/main").set(state.settings).catch(showSaveError);
     } else {
       lsSave(); render();
       return Promise.resolve();
@@ -152,13 +157,21 @@
     return state.ingredients.find(function(i){ return i.id === id; });
   }
 
+  function ingredientUnitCost(ing){
+    // costo de la unidad en la que se carga la receta: $/gramo si es "kg", $/unidad si es "unidad"
+    if (!ing) return 0;
+    if (ing.unitType === "unidad") return Number(ing.pricePerUnit) || 0;
+    return (Number(ing.pricePerKg) || 0) / 1000;
+  }
+  function ingredientAmountLabel(ing){
+    return (ing && ing.unitType === "unidad") ? "cantidad (unidades)" : "gramos";
+  }
   function recipeIngredientCost(recipe){
     var total = 0;
     (recipe.items || []).forEach(function(it){
       var ing = ingredientById(it.ingredientId);
       if (!ing) return;
-      var pricePerGram = (Number(ing.pricePerKg) || 0) / 1000;
-      total += pricePerGram * (Number(it.grams) || 0);
+      total += ingredientUnitCost(ing) * (Number(it.grams) || 0);
     });
     return total;
   }
@@ -250,22 +263,57 @@
     nameField.appendChild(text("label","","Nombre"));
     var nameInput = el("input",{type:"text", placeholder:"Harina 0000", required:"true"});
     nameField.appendChild(nameInput);
-    var priceField = el("div",{class:"field"});
-    priceField.appendChild(text("label","","Precio por kilo ($)"));
-    var priceInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"1200", required:"true"});
-    priceField.appendChild(priceInput);
     form.appendChild(nameField);
-    form.appendChild(priceField);
+
+    var typeField = el("div",{class:"field"});
+    typeField.appendChild(text("label","","Se compra..."));
+    var typeSel = el("select",{});
+    var optKg = el("option",{value:"kg"}); optKg.textContent = "Por kilogramo (ej: harina, azúcar)";
+    var optUnidad = el("option",{value:"unidad"}); optUnidad.textContent = "Por unidad (ej: huevos, esencias en frasco)";
+    typeSel.appendChild(optKg); typeSel.appendChild(optUnidad);
+    typeField.appendChild(typeSel);
+    form.appendChild(typeField);
+
+    var priceKgField = el("div",{class:"field"});
+    priceKgField.appendChild(text("label","","Precio por kilo ($)"));
+    var priceKgInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"1200"});
+    priceKgField.appendChild(priceKgInput);
+
+    var priceUnField = el("div",{class:"field"});
+    priceUnField.appendChild(text("label","","Precio por unidad ($)"));
+    var priceUnInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"180"});
+    priceUnField.appendChild(priceUnInput);
+    priceUnField.style.display = "none";
+
+    typeSel.onchange = function(){
+      var isUnidad = typeSel.value === "unidad";
+      priceKgField.style.display = isUnidad ? "none" : "";
+      priceUnField.style.display = isUnidad ? "" : "none";
+    };
+
+    form.appendChild(priceKgField);
+    form.appendChild(priceUnField);
+
     var addBtn = el("button",{class:"btn block", type:"submit"});
     addBtn.textContent = "Agregar ingrediente";
     form.appendChild(addBtn);
     form.onsubmit = function(ev){
       ev.preventDefault();
       var name = nameInput.value.trim();
-      var price = parseFloat(priceInput.value);
-      if (!name || isNaN(price) || price < 0) return;
-      addDoc("ingredients", {name:name, pricePerKg:price});
-      nameInput.value = ""; priceInput.value = "";
+      if (!name) return;
+      var isUnidad = typeSel.value === "unidad";
+      var data = {name:name, unitType: typeSel.value};
+      if (isUnidad) {
+        var priceUn = parseFloat(priceUnInput.value);
+        if (isNaN(priceUn) || priceUn < 0) return;
+        data.pricePerUnit = priceUn;
+      } else {
+        var priceKg = parseFloat(priceKgInput.value);
+        if (isNaN(priceKg) || priceKg < 0) return;
+        data.pricePerKg = priceKg;
+      }
+      addDoc("ingredients", data);
+      nameInput.value = ""; priceKgInput.value = ""; priceUnInput.value = "";
     };
     card.appendChild(form);
 
@@ -278,7 +326,9 @@
         var row = el("div",{class:"list-item"});
         var left = el("div",{});
         left.appendChild(text("div","item-name", ing.name));
-        left.appendChild(text("div","item-sub", fmt(ing.pricePerKg) + " / kg  \u00b7  " + fmt((ing.pricePerKg||0)/1000) + " / g"));
+        left.appendChild(text("div","item-sub", ing.unitType === "unidad"
+          ? (fmt(ing.pricePerUnit) + " / unidad")
+          : (fmt(ing.pricePerKg) + " / kg  \u00b7  " + fmt((ing.pricePerKg||0)/1000) + " / g")));
         row.appendChild(left);
         var del = el("button",{class:"icon-btn danger"});
         del.textContent = "Eliminar";
@@ -324,7 +374,7 @@
     form.appendChild(nameField);
 
     var itemsWrap = el("div",{class:"field"});
-    itemsWrap.appendChild(text("label","","Ingredientes de la receta (en gramos)"));
+    itemsWrap.appendChild(text("label","","Ingredientes de la receta (en gramos, o en unidades si el ingrediente se compra por unidad)"));
     var itemsList = el("div",{});
     function renderItems(){
       itemsList.innerHTML = "";
@@ -339,13 +389,17 @@
           if (ing.id === it.ingredientId) opt.selected = true;
           sel.appendChild(opt);
         });
-        sel.onchange = function(){ it.ingredientId = sel.value; };
-        var gramsInput = el("input",{type:"number", min:"0", step:"1", placeholder:"gramos", value: it.grams || ""});
-        gramsInput.oninput = function(){ it.grams = parseFloat(gramsInput.value) || 0; };
+        var currentIng = ingredientById(it.ingredientId);
+        var amountInput = el("input",{type:"number", min:"0", step:"1", placeholder: ingredientAmountLabel(currentIng), value: it.grams || ""});
+        sel.onchange = function(){
+          it.ingredientId = sel.value;
+          amountInput.placeholder = ingredientAmountLabel(ingredientById(it.ingredientId));
+        };
+        amountInput.oninput = function(){ it.grams = parseFloat(amountInput.value) || 0; };
         var rm = el("button",{type:"button", class:"icon-btn danger"});
         rm.textContent = "✕";
         rm.onclick = function(){ draft.items.splice(idx,1); renderItems(); };
-        row.appendChild(sel); row.appendChild(gramsInput); row.appendChild(rm);
+        row.appendChild(sel); row.appendChild(amountInput); row.appendChild(rm);
         itemsList.appendChild(row);
       });
     }

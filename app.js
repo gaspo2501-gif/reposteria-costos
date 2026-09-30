@@ -158,13 +158,17 @@
   }
 
   function ingredientUnitCost(ing){
-    // costo de la unidad en la que se carga la receta: $/gramo si es "kg", $/unidad si es "unidad"
+    // costo de la unidad en la que se carga la receta: $/gramo (kg), $/unidad, o $/ml (litro)
     if (!ing) return 0;
     if (ing.unitType === "unidad") return Number(ing.pricePerUnit) || 0;
+    if (ing.unitType === "litro") return (Number(ing.pricePerLitro) || 0) / 1000;
     return (Number(ing.pricePerKg) || 0) / 1000;
   }
   function ingredientAmountLabel(ing){
-    return (ing && ing.unitType === "unidad") ? "cantidad (unidades)" : "gramos";
+    if (!ing) return "gramos";
+    if (ing.unitType === "unidad") return "cantidad (unidades)";
+    if (ing.unitType === "litro") return "mililitros (ml)";
+    return "gramos";
   }
   function recipeIngredientCost(recipe){
     var total = 0;
@@ -269,8 +273,9 @@
     typeField.appendChild(text("label","","Se compra..."));
     var typeSel = el("select",{});
     var optKg = el("option",{value:"kg"}); optKg.textContent = "Por kilogramo (ej: harina, azúcar)";
+    var optLitro = el("option",{value:"litro"}); optLitro.textContent = "Por litro (ej: leche, aceite)";
     var optUnidad = el("option",{value:"unidad"}); optUnidad.textContent = "Por unidad (ej: huevos, esencias en frasco)";
-    typeSel.appendChild(optKg); typeSel.appendChild(optUnidad);
+    typeSel.appendChild(optKg); typeSel.appendChild(optLitro); typeSel.appendChild(optUnidad);
     typeField.appendChild(typeSel);
     form.appendChild(typeField);
 
@@ -279,6 +284,12 @@
     var priceKgInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"1200"});
     priceKgField.appendChild(priceKgInput);
 
+    var priceLitroField = el("div",{class:"field"});
+    priceLitroField.appendChild(text("label","","Precio por litro ($)"));
+    var priceLitroInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"900"});
+    priceLitroField.appendChild(priceLitroInput);
+    priceLitroField.style.display = "none";
+
     var priceUnField = el("div",{class:"field"});
     priceUnField.appendChild(text("label","","Precio por unidad ($)"));
     var priceUnInput = el("input",{type:"number", step:"0.01", min:"0", placeholder:"180"});
@@ -286,12 +297,13 @@
     priceUnField.style.display = "none";
 
     typeSel.onchange = function(){
-      var isUnidad = typeSel.value === "unidad";
-      priceKgField.style.display = isUnidad ? "none" : "";
-      priceUnField.style.display = isUnidad ? "" : "none";
+      priceKgField.style.display = typeSel.value === "kg" ? "" : "none";
+      priceLitroField.style.display = typeSel.value === "litro" ? "" : "none";
+      priceUnField.style.display = typeSel.value === "unidad" ? "" : "none";
     };
 
     form.appendChild(priceKgField);
+    form.appendChild(priceLitroField);
     form.appendChild(priceUnField);
 
     var addBtn = el("button",{class:"btn block", type:"submit"});
@@ -301,19 +313,22 @@
       ev.preventDefault();
       var name = nameInput.value.trim();
       if (!name) return;
-      var isUnidad = typeSel.value === "unidad";
       var data = {name:name, unitType: typeSel.value};
-      if (isUnidad) {
+      if (typeSel.value === "unidad") {
         var priceUn = parseFloat(priceUnInput.value);
         if (isNaN(priceUn) || priceUn < 0) return;
         data.pricePerUnit = priceUn;
+      } else if (typeSel.value === "litro") {
+        var priceLitro = parseFloat(priceLitroInput.value);
+        if (isNaN(priceLitro) || priceLitro < 0) return;
+        data.pricePerLitro = priceLitro;
       } else {
         var priceKg = parseFloat(priceKgInput.value);
         if (isNaN(priceKg) || priceKg < 0) return;
         data.pricePerKg = priceKg;
       }
       addDoc("ingredients", data);
-      nameInput.value = ""; priceKgInput.value = ""; priceUnInput.value = "";
+      nameInput.value = ""; priceKgInput.value = ""; priceLitroInput.value = ""; priceUnInput.value = "";
     };
     card.appendChild(form);
 
@@ -326,9 +341,10 @@
         var row = el("div",{class:"list-item"});
         var left = el("div",{});
         left.appendChild(text("div","item-name", ing.name));
-        left.appendChild(text("div","item-sub", ing.unitType === "unidad"
-          ? (fmt(ing.pricePerUnit) + " / unidad")
-          : (fmt(ing.pricePerKg) + " / kg  \u00b7  " + fmt((ing.pricePerKg||0)/1000) + " / g")));
+        left.appendChild(text("div","item-sub",
+          ing.unitType === "unidad" ? (fmt(ing.pricePerUnit) + " / unidad") :
+          ing.unitType === "litro" ? (fmt(ing.pricePerLitro) + " / litro  \u00b7  " + fmt((ing.pricePerLitro||0)/1000) + " / ml") :
+          (fmt(ing.pricePerKg) + " / kg  \u00b7  " + fmt((ing.pricePerKg||0)/1000) + " / g")));
         row.appendChild(left);
         var del = el("button",{class:"icon-btn danger"});
         del.textContent = "Eliminar";
